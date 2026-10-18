@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .database import Base
+
+
+class BookingStatus:
+    PENDING_PAYMENT = "pending_payment"  # slot held while the client pays
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"  # payment not completed within the hold time
+    PAYMENT_FAILED = "payment_failed"  # client closed checkout or payment failed
+    REFUNDED_CONFLICT = "refunded_conflict"  # paid late after the slot went to someone else
+
+
+class Service(Base):
+    __tablename__ = "services"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    fee_paise: Mapped[int] = mapped_column(Integer)  # Rs 10,000 = 1,000,000 paise
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Employee(Base):
+    __tablename__ = "employees"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(255), unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class BlockedDate(Base):
+    """Holidays or days off: no slots are offered."""
+
+    __tablename__ = "blocked_dates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date, unique=True)
+    reason: Mapped[str] = mapped_column(String(200), default="")
+
+
+class Booking(Base):
+    __tablename__ = "bookings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reference: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    manage_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id"))
+    # Snapshots: a later price or name change never alters an existing booking.
+    service_name: Mapped[str] = mapped_column(String(120))
+    fee_paise: Mapped[int] = mapped_column(Integer)
+    duration_minutes: Mapped[int] = mapped_column(Integer)
+
+    client_name: Mapped[str] = mapped_column(String(120))
+    client_email: Mapped[str] = mapped_column(String(255))
+    client_phone: Mapped[str] = mapped_column(String(30))
+
+    slot_date: Mapped[date] = mapped_column(Date, index=True)
+    slot_time: Mapped[str] = mapped_column(String(5))  # "10:00"
+
+    status: Mapped[str] = mapped_column(String(30), default=BookingStatus.PENDING_PAYMENT, index=True)
+    hold_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    razorpay_order_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    refund_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    refund_paise: Mapped[int] = mapped_column(Integer, default=0)
+
+    employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    employee: Mapped[Employee | None] = relationship()
+
+    calendar_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    meet_link: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    reschedule_count: Mapped[int] = mapped_column(Integer, default=0)
+    cancelled_by: Mapped[str | None] = mapped_column(String(10), nullable=True)  # client | admin
+
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SlotLock(Base):
+    """One row per occupied slot. The unique constraint is what makes double booking
+    impossible, even when two clients click at the same moment: the database rejects
+    the second insert."""
+
+    __tablename__ = "slot_locks"
+    __table_args__ = (UniqueConstraint("slot_date", "slot_time", name="uq_slot"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slot_date: Mapped[date] = mapped_column(Date)
+    slot_time: Mapped[str] = mapped_column(String(5))
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), unique=True)
