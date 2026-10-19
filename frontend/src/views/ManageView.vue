@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 import { inr, longDate } from '../format.js'
 import SlotPicker from '../components/SlotPicker.vue'
+import PageHero from '../components/PageHero.vue'
 
 const token = useRoute().params.token
 const booking = ref(null)
@@ -69,15 +70,22 @@ const statusText = {
 </script>
 
 <template>
-  <div class="page">
-    <p v-if="loadError" class="notice notice--error">{{ loadError }}</p>
-    <p v-else-if="!booking" class="muted">Loading your booking…</p>
+  <PageHero badge="Your consultation" title="Manage your" highlight="Booking" text="Reschedule once or cancel for a full refund, up to 24 hours before your session." compact />
+
+  <div class="page page--over">
+    <p v-if="loadError" class="sheet notice--error">{{ loadError }}</p>
+    <p v-else-if="!booking" class="sheet muted">Loading your booking…</p>
 
     <section v-else class="sheet stack">
-      <div class="row">
-        <h1>Your booking</h1>
-        <span class="spacer" />
-        <span class="tag" :class="{ 'tag--danger': booking.status !== 'confirmed' }">{{ statusText[booking.status] || booking.status }}</span>
+      <div class="card-head">
+        <span class="tile" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></svg>
+        </span>
+        <div class="card-head__text">
+          <span><span class="tag" :class="booking.status === 'confirmed' ? 'tag--ok' : 'tag--danger'">{{ statusText[booking.status] || booking.status }}</span></span>
+          <h2>Booking {{ booking.reference }}</h2>
+        </div>
+        <span class="gold-rule" />
       </div>
       <p v-if="done" class="notice" role="status">{{ done }}</p>
 

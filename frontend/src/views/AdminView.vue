@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import { addDays, inr, longDate, todayIso } from '../format.js'
 import EmployeesPanel from '../components/admin/EmployeesPanel.vue'
 import HolidaysPanel from '../components/admin/HolidaysPanel.vue'
+import PageHero from '../components/PageHero.vue'
 
 const tab = ref('bookings')
 const start = ref(todayIso())
@@ -77,17 +78,17 @@ function onEmployeesChanged(list) {
 </script>
 
 <template>
-  <div class="page page--wide">
-    <div class="head">
-      <h1>Consultations</h1>
-      <p class="small muted">The dashboard has no sign-in yet. Restrict access before going live.</p>
-    </div>
+  <PageHero badge="Admin" title="Consultations" highlight="Dashboard" text="Bookings day by day. Assign who gives each session; they are emailed and added to the calendar invite." compact />
+
+  <div class="page page--wide page--over">
 
     <nav class="tabs" aria-label="Dashboard sections">
       <button type="button" :aria-current="tab === 'bookings' ? 'page' : undefined" @click="tab = 'bookings'">Bookings</button>
       <button type="button" :aria-current="tab === 'employees' ? 'page' : undefined" @click="tab = 'employees'">Employees</button>
       <button type="button" :aria-current="tab === 'holidays' ? 'page' : undefined" @click="tab = 'holidays'">Holidays</button>
     </nav>
+
+    <p class="small muted signin-note">The dashboard has no sign-in yet. Restrict access before going live.</p>
 
     <section v-if="tab === 'bookings'" class="stack">
       <div class="toolbar">
@@ -170,56 +171,67 @@ function onEmployeesChanged(list) {
 </template>
 
 <style scoped>
-.head { display: grid; gap: 4px; margin-bottom: 20px; }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
-.tabs button {
-  border: 0;
-  background: none;
-  font: 500 var(--step-0) var(--font);
-  color: var(--muted);
-  padding: 10px 14px;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  cursor: pointer;
+.signin-note { margin: -8px 0 18px 8px; }
+
+.tabs {
+  display: inline-flex; gap: 6px; padding: 8px;
+  background: var(--paper); border-radius: 999px; box-shadow: var(--shadow-card);
+  margin-bottom: 24px;
 }
-.tabs button[aria-current='page'] { color: var(--seal); border-bottom-color: var(--seal); }
+.tabs button {
+  border: 0; background: none; cursor: pointer;
+  font: 700 0.82rem var(--font); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--slate);
+  padding: 12px 22px; border-radius: 999px;
+}
+.tabs button:hover { color: var(--gold-text); }
+.tabs button[aria-current='page'] { background: var(--gold-gradient); color: var(--ink); box-shadow: var(--shadow-gold); }
 
-.toolbar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
-.stats { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center;
+  padding: 16px 20px; background: var(--paper); border-radius: 20px; box-shadow: var(--shadow-card);
+}
+.stats { margin-left: auto; display: flex; gap: 10px; align-items: center; color: var(--slate); }
+.stats strong { font-family: var(--display); font-weight: 400; font-size: 1.4rem; color: var(--gold-text); }
 
-.day { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-m); }
-.day--off { background: transparent; border-style: dashed; }
-.day__head { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; padding: 14px 18px; flex-wrap: wrap; }
-.day__head h2 { font-size: var(--step-1); }
+.day { background: var(--paper); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 24px; box-shadow: var(--shadow-card); overflow: hidden; }
+.day--off { background: #f1f5f9; box-shadow: none; border-style: dashed; }
+.day__head { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 24px; flex-wrap: wrap; }
+.day__head h2 { font-size: 1.2rem; }
+.day__head > .small { font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .slots { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 .slot {
   display: grid;
-  grid-template-columns: 170px 1fr auto;
-  gap: 16px;
-  align-items: center;
-  padding: 12px 18px;
+  grid-template-columns: 190px 1fr auto;
+  gap: 18px; align-items: center;
+  padding: 16px 24px;
   border-bottom: 1px solid var(--line);
+  border-left: 4px solid var(--gold);
 }
 .slot:last-child { border-bottom: 0; }
-.slot__time { font-weight: 500; }
-.slot--open .slot__time { color: var(--muted); font-weight: 400; }
-.slot__body { display: grid; gap: 4px; }
+.slot--open { border-left-color: transparent; }
+.slot__time { font-weight: 700; color: var(--navy); }
+.slot--open .slot__time { color: var(--muted); font-weight: 600; }
+.slot__body { display: grid; gap: 6px; }
 .client { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.contact { display: flex; gap: 14px; flex-wrap: wrap; }
+.client strong { font-size: 1.05rem; color: var(--navy); }
+.contact { display: flex; gap: 16px; flex-wrap: wrap; }
 .slot__actions { display: flex; gap: 6px; align-items: center; }
 .assign {
-  font: inherit;
-  font-size: var(--step--1);
-  padding: 7px 10px;
+  font: 600 0.88rem var(--font);
+  color: var(--ink);
+  padding: 10px 16px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-s);
+  border-radius: 999px;
   background: var(--paper);
-  min-width: 170px;
-  min-height: 36px;
+  min-width: 190px; min-height: 42px;
+  cursor: pointer;
 }
-.assign--empty { border-color: var(--held); background: var(--held-soft); }
-@media (max-width: 760px) {
-  .slot { grid-template-columns: 1fr; gap: 8px; }
+.assign:focus { outline: none; box-shadow: var(--focus); border-color: var(--gold); }
+.assign--empty { border-color: var(--gold-line); background: var(--gold-soft); color: var(--gold-text); }
+@media (max-width: 800px) {
+  .slot { grid-template-columns: 1fr; gap: 10px; }
   .stats { margin-left: 0; }
+  .tabs { display: flex; overflow-x: auto; }
 }
 </style>
