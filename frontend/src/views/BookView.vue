@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { COMPANY, inr, longDate } from '../format.js'
 import { openCheckout } from '../razorpay.js'
@@ -17,6 +17,13 @@ const paying = ref(false)
 const payError = ref('')
 const mockHold = ref(null) // test mode: no real Razorpay keys configured
 const result = ref(null)
+
+// Coupon: only on the payment step. The admin emails the code to the client.
+const couponOpen = ref(false)
+const couponInput = ref('')
+const coupon = ref(null) // { code, percent, base_fee_inr, discount_inr, total_inr }
+const couponError = ref('')
+const couponBusy = ref(false)
 const picker = ref(null)
 
 onMounted(async () => {
@@ -52,6 +59,31 @@ function goTo(n) {
   if (n < step.value) step.value = n
 }
 
+const amountToPay = computed(() => (coupon.value ? coupon.value.total_inr : service.value?.fee_inr || 0))
+
+async function applyCoupon() {
+  couponError.value = ''
+  if (!couponInput.value.trim()) {
+    couponError.value = 'Enter the coupon code from your email.'
+    return
+  }
+  couponBusy.value = true
+  try {
+    coupon.value = await api.checkCoupon(couponInput.value.trim(), choice.serviceId, form.email.trim())
+    couponInput.value = ''
+  } catch (e) {
+    couponError.value = e.message
+  } finally {
+    couponBusy.value = false
+  }
+}
+function removeCoupon() {
+  coupon.value = null
+  couponError.value = ''
+}
+// a changed service or email must be checked again
+watch(() => [choice.serviceId, form.email], () => { if (coupon.value) removeCoupon() })
+
 async function pay() {
   payError.value = ''
   paying.value = true
@@ -64,9 +96,17 @@ async function pay() {
       name: form.name.trim(),
       email: form.email.trim(),
       phone: form.phone.trim(),
+      coupon_code: coupon.value?.code || null,
     })
   } catch (e) {
     paying.value = false
+    if (e.code === 'coupon') {
+      // coupon expired or was used meanwhile: stay here, show it by the coupon box
+      coupon.value = null
+      couponOpen.value = true
+      couponError.value = e.message
+      return
+    }
     payError.value = e.message
     if (e.status === 409 || e.status === 400) {
       choice.slot = { date: choice.slot.date, time: null, label: null }
@@ -75,6 +115,12 @@ async function pay() {
     return
   }
 
+  if (hold.booking) {
+    // free booking (100% coupon): already confirmed, no payment needed
+    paying.value = false
+    result.value = hold.booking
+    return
+  }
   if (hold.order.mock) {
     mockHold.value = hold
     return
@@ -137,6 +183,8 @@ function startOver() {
   choice.slot = { date: null, time: null, label: null }
   Object.assign(form, { name: '', email: '', phone: '', consent: false })
   touched.value = false
+  removeCoupon()
+  couponOpen.value = false
 }
 </script>
 
@@ -168,6 +216,10 @@ function startOver() {
           <tr><th>Service</th><td>{{ result.service_name }}</td></tr>
           <tr><th>Date</th><td>{{ longDate(result.date) }}</td></tr>
           <tr><th>Time</th><td>{{ result.slot_label }} IST</td></tr>
+          <template v-if="result.discount_inr">
+            <tr><th>Consultation fee</th><td>{{ inr(result.base_fee_inr) }}</td></tr>
+            <tr><th>Coupon {{ result.coupon_code }}</th><td class="discount">− {{ inr(result.discount_inr) }}</td></tr>
+          </template>
           <tr><th>Amount paid</th><td>{{ inr(result.fee_inr) }}</td></tr>
           <tr>
             <th>Google Meet</th>
@@ -233,8 +285,8 @@ function startOver() {
                 <span class="service__desc">{{ s.description }}</span>
               </span>
               <span class="service__meta">
-                <span class="service__fee">{{ inr(s.fee_inr) }}</span>
-                <span class="service__len">{{ s.duration_minutes }} min · Online</span>
+                <span class="service__len">{{ s.duration_minutes }} min</span>
+                <span class="service__len">Online</span>
               </span>
             </label>
           </div>
@@ -336,8 +388,33 @@ function startOver() {
               <tr><th>Name</th><td>{{ form.name }}</td></tr>
               <tr><th>Email</th><td>{{ form.email }}</td></tr>
               <tr><th>Phone</th><td>{{ form.phone }}</td></tr>
-              <tr class="total"><th>Amount to pay</th><td>{{ inr(service?.fee_inr || 0) }}</td></tr>
+              <tr><th>Consultation fee</th><td>{{ inr(service?.fee_inr || 0) }}</td></tr>
+              <tr v-if="coupon">
+                <th>Coupon {{ coupon.code }} ({{ coupon.percent }}% off)</th>
+                <td class="discount">− {{ inr(coupon.discount_inr) }}</td>
+              </tr>
+              <tr class="total"><th>Amount to pay</th><td>{{ inr(amountToPay) }}</td></tr>
             </tbody></table>
+          </div>
+
+          <div class="coupon">
+            <div v-if="coupon" class="coupon__applied">
+              <span class="tag tag--ok">{{ coupon.code }} applied</span>
+              <span class="small muted">You save {{ inr(coupon.discount_inr) }}</span>
+              <span class="spacer" />
+              <button class="btn btn--quiet btn--small" type="button" :disabled="paying" @click="removeCoupon">Remove</button>
+            </div>
+            <button v-else-if="!couponOpen" class="btn btn--quiet btn--small coupon__toggle" type="button" @click="couponOpen = true">
+              + Use coupon
+            </button>
+            <form v-else class="coupon__form" novalidate @submit.prevent="applyCoupon">
+              <div class="field">
+                <label for="coupon">Coupon code</label>
+                <input id="coupon" v-model="couponInput" placeholder="LEX-XXXXX" autocomplete="off" spellcheck="false" />
+              </div>
+              <button class="btn btn--small" type="submit" :disabled="couponBusy">{{ couponBusy ? 'Checking…' : 'Apply' }}</button>
+            </form>
+            <p v-if="couponError" class="small coupon__error" role="alert">{{ couponError }}</p>
           </div>
           <p class="small muted">
             Your slot is held while you pay. Cancel 24 hours or more before the session for a full refund. You can reschedule once.
@@ -356,10 +433,10 @@ function startOver() {
             <button class="btn" type="button" :disabled="paying" @click="back">Back</button>
             <span class="spacer" />
             <button class="btn btn--primary btn--pay" type="button" :disabled="paying" @click="pay">
-              {{ paying ? 'Opening payment…' : `Pay ${inr(service?.fee_inr || 0)}` }}
+              {{ paying ? (amountToPay === 0 ? 'Confirming…' : 'Opening payment…') : amountToPay === 0 ? 'Confirm free booking' : `Pay ${inr(amountToPay)}` }}
             </button>
           </div>
-          <p class="small muted pay-note">
+          <p v-if="amountToPay > 0" class="small muted pay-note">
             <span class="dot" aria-hidden="true" /> UPI, cards, net banking and wallets accepted
           </p>
         </div>
@@ -435,7 +512,6 @@ function startOver() {
   background: rgba(255, 255, 255, 0.7);
   border: 1px solid var(--gold-line);
 }
-.service__fee { font-family: var(--display); font-size: 1.1rem; color: var(--gold-text); }
 .service__len { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 
 .service.is-on { background: var(--gold-gradient); border-color: #d9a406; box-shadow: var(--shadow-gold); }
@@ -443,7 +519,7 @@ function startOver() {
 .service.is-on .service__desc { color: rgba(255, 255, 255, 0.92); }
 .service.is-on .service__tile { background: rgba(255, 255, 255, 0.25); border-color: rgba(255, 255, 255, 0.5); color: #fff; }
 .service.is-on .service__meta { background: rgba(255, 255, 255, 0.22); border-color: rgba(255, 255, 255, 0.45); }
-.service.is-on .service__fee, .service.is-on .service__len { color: #fff; }
+.service.is-on .service__len { color: #fff; }
 @media (max-width: 600px) {
   .service { grid-template-columns: auto 1fr; }
   .service__meta { grid-column: 1 / -1; justify-items: start; grid-auto-flow: column; justify-content: space-between; align-items: center; }
@@ -454,6 +530,14 @@ function startOver() {
 @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } .review { padding: 4px 16px; } }
 .actions { display: flex; gap: 12px; align-items: center; padding-top: 10px; }
 .btn--pay { min-width: 200px; font-size: 1rem; }
+.discount { color: var(--ok) !important; }
+.coupon { display: grid; gap: 8px; }
+.coupon__toggle { justify-self: start; padding-left: 0; }
+.coupon__form { display: grid; grid-template-columns: minmax(0, 320px) auto; gap: 12px; align-items: end; }
+.coupon__form input { text-transform: uppercase; letter-spacing: 0.08em; }
+.coupon__applied { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-radius: 14px; background: #f0fdf4; border: 1px solid #bbf7d0; }
+.coupon__error { color: var(--danger); }
+@media (max-width: 600px) { .coupon__form { grid-template-columns: 1fr; } }
 .pay-note { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
 </style>

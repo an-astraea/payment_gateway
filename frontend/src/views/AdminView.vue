@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import { addDays, inr, longDate, todayIso } from '../format.js'
 import EmployeesPanel from '../components/admin/EmployeesPanel.vue'
 import HolidaysPanel from '../components/admin/HolidaysPanel.vue'
+import CouponsPanel from '../components/admin/CouponsPanel.vue'
 import PageHero from '../components/PageHero.vue'
 
 const tab = ref('bookings')
@@ -86,6 +87,7 @@ function onEmployeesChanged(list) {
       <button type="button" :aria-current="tab === 'bookings' ? 'page' : undefined" @click="tab = 'bookings'">Bookings</button>
       <button type="button" :aria-current="tab === 'employees' ? 'page' : undefined" @click="tab = 'employees'">Employees</button>
       <button type="button" :aria-current="tab === 'holidays' ? 'page' : undefined" @click="tab = 'holidays'">Holidays</button>
+      <button type="button" :aria-current="tab === 'coupons' ? 'page' : undefined" @click="tab = 'coupons'">Coupons</button>
     </nav>
 
     <p class="small muted signin-note">The dashboard has no sign-in yet. Restrict access before going live.</p>
@@ -134,6 +136,7 @@ function onEmployeesChanged(list) {
                 <div class="client">
                   <strong>{{ slot.booking.client_name }}</strong>
                   <span class="small muted">{{ slot.booking.service_name }}, {{ slot.booking.reference }}</span>
+                  <span v-if="slot.booking.coupon_code" class="tag">{{ slot.booking.coupon_code }} · paid {{ inr(slot.booking.fee_inr) }}</span>
                 </div>
                 <div class="small contact">
                   <a :href="`mailto:${slot.booking.client_email}`">{{ slot.booking.client_email }}</a>
@@ -166,7 +169,8 @@ function onEmployeesChanged(list) {
     </section>
 
     <EmployeesPanel v-else-if="tab === 'employees'" @changed="onEmployeesChanged" />
-    <HolidaysPanel v-else />
+    <HolidaysPanel v-else-if="tab === 'holidays'" />
+    <CouponsPanel v-else />
   </div>
 </template>
 

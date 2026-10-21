@@ -4,6 +4,7 @@ const FIELD_NAMES = { name: 'Name', email: 'Email', phone: 'Phone number', date:
 
 function messageFrom(detail, status) {
   if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && detail.message) return detail.message
   if (Array.isArray(detail) && detail.length) {
     const first = detail[0]
     const field = FIELD_NAMES[first.loc?.[first.loc.length - 1]] || 'A field'
@@ -27,13 +28,18 @@ async function request(path, { method = 'GET', body, params } = {}) {
   }
   if (res.status === 204) return null
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw Object.assign(new Error(messageFrom(data.detail, res.status)), { status: res.status })
+  if (!res.ok) {
+    // code: 'coupon' means the problem is the coupon, not the slot
+    throw Object.assign(new Error(messageFrom(data.detail, res.status)), { status: res.status, code: data.detail?.code })
+  }
   return data
 }
 
 export const api = {
   services: () => request('/api/services'),
   availability: (start, days) => request('/api/availability', { params: { start, days } }),
+  checkCoupon: (code, serviceId, email) =>
+    request('/api/coupons/check', { method: 'POST', body: { code, service_id: serviceId, email } }),
   hold: (payload) => request('/api/bookings/hold', { method: 'POST', body: payload }),
   verify: (payload) => request('/api/bookings/verify', { method: 'POST', body: payload }),
   release: (orderId) => request('/api/bookings/release', { method: 'POST', body: { razorpay_order_id: orderId } }),
@@ -50,5 +56,12 @@ export const api = {
     blocked: () => request('/api/admin/blocked-dates'),
     addBlocked: (b) => request('/api/admin/blocked-dates', { method: 'POST', body: b }),
     removeBlocked: (id) => request(`/api/admin/blocked-dates/${id}`, { method: 'DELETE' }),
+    couponConfig: () => request('/api/admin/coupons/config'),
+    coupons: (status) => request('/api/admin/coupons', { params: { status } }),
+    createCoupon: (percent) => request('/api/admin/coupons', { method: 'POST', body: { percent } }),
+    // clientEmail empty = resend to the saved email
+    sendCoupon: (id, clientEmail) =>
+      request(`/api/admin/coupons/${id}/send`, { method: 'POST', body: { client_email: clientEmail || null } }),
+    deactivateCoupon: (id) => request(`/api/admin/coupons/${id}/deactivate`, { method: 'POST' }),
   },
 }

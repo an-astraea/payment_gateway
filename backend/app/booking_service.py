@@ -11,7 +11,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import emails, policy
+from . import coupon_rules, coupons, emails, policy
 from .config import get_settings
 from .integrations import google_calendar as gcal
 from .integrations import razorpay_client as rzp
@@ -62,6 +62,9 @@ def mail_context(b: Booking) -> emails.MailContext:
         employee_name=b.employee.name if b.employee else None,
         client_email=b.client_email,
         client_phone=b.client_phone,
+        base_fee_inr=(b.base_fee_paise or b.fee_paise) // 100,
+        discount_inr=b.discount_paise // 100,
+        coupon_code=b.coupon_code,
     )
 
 
@@ -88,6 +91,7 @@ def release_expired_holds(db: Session) -> int:
     for b in expired:
         b.status = BookingStatus.EXPIRED
         db.execute(delete(SlotLock).where(SlotLock.booking_id == b.id))
+        coupons.release(db, b)
     if expired:
         db.commit()
         log.info("Released %d expired holds", len(expired))
@@ -141,13 +145,23 @@ def create_hold(db: Session, req) -> Booking:
         raise HTTPException(404, "That service is not available.")
     _check_slot_open(db, req.date, req.time)
 
+    coupon = None
+    discount = 0
+    if getattr(req, "coupon_code", None):
+        coupon = coupons.validate(db, req.coupon_code, str(req.email))
+        discount = coupon_rules.discount_paise(service.fee_paise, coupon.percent)
+
     now = utcnow()
     b = Booking(
         reference=_new_reference(),
         manage_token=secrets.token_urlsafe(32),
         service_id=service.id,
         service_name=service.name,
-        fee_paise=service.fee_paise,  # price set by the server
+        base_fee_paise=service.fee_paise,  # price set by the server
+        discount_paise=discount,
+        fee_paise=service.fee_paise - discount,  # amount the client pays
+        coupon_id=coupon.id if coupon else None,
+        coupon_code=coupon.code if coupon else None,
         duration_minutes=service.duration_minutes,
         client_name=req.name.strip(),
         client_email=str(req.email).lower(),
@@ -166,6 +180,18 @@ def create_hold(db: Session, req) -> Booking:
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "Someone has just booked this slot. Choose another time.")
+    if coupon:
+        try:
+            coupons.reserve(db, coupon, b)
+        except HTTPException:
+            db.rollback()
+            raise
+
+    if b.fee_paise == 0:
+        # 100% coupon: nothing to pay, so the booking is confirmed straight away
+        db.commit()
+        _confirm(db, b, payment_id=None)
+        return b
 
     try:
         b.razorpay_order_id = rzp.create_order(b.fee_paise, b.reference, {"booking": b.reference})
@@ -176,11 +202,12 @@ def create_hold(db: Session, req) -> Booking:
     return b
 
 
-def _confirm(db: Session, b: Booking, payment_id: str) -> None:
+def _confirm(db: Session, b: Booking, payment_id: str | None) -> None:
     b.status = BookingStatus.CONFIRMED
     b.razorpay_payment_id = payment_id
     b.confirmed_at = to_db(utcnow())
     b.hold_expires_at = None
+    coupons.mark_used(db, b)
     db.commit()
 
     rules = _rules()
@@ -227,6 +254,7 @@ def confirm_payment(db: Session, order_id: str, payment_id: str) -> Booking:
             except rzp.PaymentError:
                 log.exception("Conflict refund failed for %s. Refund it manually.", b.reference)
             b.status = BookingStatus.REFUNDED_CONFLICT
+            coupons.release(db, b)  # not used: the client can still use it for another slot
             db.commit()
             _mail(b.client_email, emails.payment_refunded_conflict(mail_context(b)))
             return b
@@ -240,6 +268,7 @@ def release_hold(db: Session, order_id: str) -> None:
     if b and b.status == BookingStatus.PENDING_PAYMENT:
         b.status = BookingStatus.PAYMENT_FAILED
         db.execute(delete(SlotLock).where(SlotLock.booking_id == b.id))
+        coupons.release(db, b)
         db.commit()
 
 
@@ -402,6 +431,9 @@ def admin_booking(b: Booking) -> dict:
         "status": b.status,
         "service_name": b.service_name,
         "fee_inr": b.fee_paise // 100,
+        "base_fee_inr": (b.base_fee_paise or b.fee_paise) // 100,
+        "discount_inr": b.discount_paise // 100,
+        "coupon_code": b.coupon_code,
         "client_name": b.client_name,
         "client_email": b.client_email,
         "client_phone": b.client_phone,
@@ -420,6 +452,9 @@ def public_view(b: Booking, message: str | None = None) -> dict:
         "status": b.status,
         "service_name": b.service_name,
         "fee_inr": b.fee_paise // 100,
+        "base_fee_inr": (b.base_fee_paise or b.fee_paise) // 100,
+        "discount_inr": b.discount_paise // 100,
+        "coupon_code": b.coupon_code,
         "date": b.slot_date,
         "time": b.slot_time,
         "slot_label": slot_label(_rules(), b.slot_time),

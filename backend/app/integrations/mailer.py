@@ -13,11 +13,12 @@ from ..config import get_settings
 log = logging.getLogger(__name__)
 
 
-def send_email(to: str, subject: str, html: str, text: str) -> None:
+def send_email(to: str, subject: str, html: str, text: str) -> bool:
+    """Returns True if the email was handed to Zoho, False if it was only logged or failed."""
     s = get_settings()
     if not s.smtp_enabled:
         log.warning("SMTP not configured. Email to %s\nSubject: %s\n%s", to, subject, text)
-        return
+        return False
     msg = EmailMessage()
     msg["From"] = formataddr((s.mail_from_name, s.mail_from))
     msg["To"] = to
@@ -35,5 +36,7 @@ def send_email(to: str, subject: str, html: str, text: str) -> None:
                 smtp.login(s.smtp_username, s.smtp_password)
                 smtp.send_message(msg)
         log.info("Email sent to %s: %s", to, subject)
+        return True
     except Exception:  # never break a booking because an email failed
         log.exception("Email to %s failed: %s", to, subject)
+        return False

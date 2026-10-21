@@ -136,5 +136,97 @@ class BookingFlowTest(unittest.TestCase):
         self.assertIn("10:00", self.free_times())
 
 
+@unittest.skipIf(TestClient is None, "Install backend requirements to run the API tests")
+class CouponFlowTest(BookingFlowTest):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        days = cls.client.get("/api/availability").json()
+        cls.day = next(d["date"] for d in days if d["open"] and d["date"] > cls.day)  # a fresh date
+
+    def hold(self, time, email="riya@example.com", coupon=None):
+        body = {"service_id": 1, "date": self.day, "time": time, "name": "Riya Sharma", "email": email, "phone": "+91 98765 43210"}
+        if coupon:
+            body["coupon_code"] = coupon
+        return self.client.post("/api/bookings/hold", json=body)
+
+    def test_full_flow(self):  # replaces the parent test in this class
+        pass
+
+    def test_coupon_flow(self):
+        # generate first (no email yet), then send it to the client
+        c = self.client.post("/api/admin/coupons", json={"percent": 25})
+        self.assertEqual(c.status_code, 201, c.text)
+        code = c.json()["code"]
+        self.assertRegex(code, r"^LEX-[A-Z0-9]{5}$")
+        self.assertEqual((c.json()["status"], c.json()["client_email"]), ("unused", ""))
+        sent = self.client.post(f"/api/admin/coupons/{c.json()['id']}/send", json={"client_email": "meera@example.com"})
+        self.assertEqual(sent.json()["client_email"], "meera@example.com")
+
+        # preview on the payment step
+        chk = self.client.post("/api/coupons/check", json={"code": code.lower(), "service_id": 1, "email": "meera@example.com"}).json()
+        self.assertEqual((chk["base_fee_inr"], chk["discount_inr"], chk["total_inr"]), (10000, 2500, 7500))
+
+        # locked to the email it was sent to
+        wrong = self.client.post("/api/coupons/check", json={"code": code, "service_id": 1, "email": "other@example.com"})
+        self.assertEqual(wrong.status_code, 400)
+        self.assertEqual(wrong.json()["detail"]["code"], "coupon")
+
+        # closing the payment window does not use up the coupon
+        h1 = self.hold("17:00", "meera@example.com", code).json()
+        self.assertEqual(h1["order"]["amount_paise"], 750_000)
+        self.client.post("/api/bookings/release", json={"razorpay_order_id": h1["order"]["id"]})
+        self.assertEqual(self.client.post("/api/coupons/check", json={"code": code, "service_id": 1, "email": "meera@example.com"}).status_code, 200)
+
+        # paying uses it for good
+        h2 = self.hold("17:00", "meera@example.com", code).json()
+        paid = self.pay(h2["order"]["id"], 50).json()
+        self.assertEqual((paid["fee_inr"], paid["discount_inr"], paid["coupon_code"]), (7500, 2500, code))
+        again = self.client.post("/api/coupons/check", json={"code": code, "service_id": 1, "email": "meera@example.com"})
+        self.assertIn("already been used", again.json()["detail"]["message"])
+
+        listed = {x["code"]: x for x in self.client.get("/api/admin/coupons").json()}
+        self.assertEqual(listed[code]["status"], "used")
+        self.assertEqual(listed[code]["amount_paid_inr"], 7500)
+        self.assertEqual(self.client.post(f"/api/admin/coupons/{listed[code]['id']}/deactivate").status_code, 400)
+
+        # deactivated and expired coupons are rejected
+        c2 = self.client.post("/api/admin/coupons", json={"percent": 75, "client_email": "meera@example.com"}).json()
+        self.client.post(f"/api/admin/coupons/{c2['id']}/deactivate")
+        d = self.client.post("/api/coupons/check", json={"code": c2["code"], "service_id": 1, "email": "meera@example.com"})
+        self.assertIn("no longer valid", d.json()["detail"]["message"])
+
+        c3 = self.client.post("/api/admin/coupons", json={"percent": 50, "client_email": "meera@example.com"}).json()
+        from sqlalchemy import update
+
+        from app.database import SessionLocal
+        from app.models import Coupon
+
+        with SessionLocal() as db:
+            db.execute(update(Coupon).where(Coupon.id == c3["id"]).values(expires_at=datetime(2000, 1, 1)))
+            db.commit()
+        e = self.client.post("/api/coupons/check", json={"code": c3["code"], "service_id": 1, "email": "meera@example.com"})
+        self.assertIn("expired", e.json()["detail"]["message"])
+
+        # only 25 / 50 / 75 / 100 allowed
+        self.assertEqual(self.client.post("/api/admin/coupons", json={"percent": 30}).status_code, 422)
+
+        # an unsent coupon is not locked to any email
+        open_c = self.client.post("/api/admin/coupons", json={"percent": 50}).json()
+        ok = self.client.post("/api/coupons/check", json={"code": open_c["code"], "service_id": 1, "email": "anyone@example.com"})
+        self.assertEqual(ok.json()["total_inr"], 5000)
+
+        # 100%: free booking, confirmed with no payment step
+        free = self.client.post("/api/admin/coupons", json={"percent": 100, "client_email": "ravi@example.com"}).json()
+        h = self.hold("10:00", "ravi@example.com", free["code"]).json()
+        self.assertIsNone(h["order"])
+        self.assertEqual((h["booking"]["status"], h["booking"]["fee_inr"], h["booking"]["discount_inr"]), ("confirmed", 0, 10000))
+        listed = {x["code"]: x for x in self.client.get("/api/admin/coupons").json()}
+        self.assertEqual(listed[free["code"]]["status"], "used")
+        token = self.token(h["reference"])
+        cancelled = self.client.post(f"/api/manage/{token}/cancel").json()
+        self.assertEqual((cancelled["status"], cancelled["refund_inr"]), ("cancelled", 0))
+
+
 if __name__ == "__main__":
     unittest.main()

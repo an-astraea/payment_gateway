@@ -37,5 +37,36 @@ def init_db() -> None:
     from .seed import seed
 
     Base.metadata.create_all(bind=engine)
+    _add_missing_columns()
     with SessionLocal() as db:
         seed(db)
+
+
+def _add_missing_columns() -> None:
+    """Small built-in upgrade step: adds columns that newer versions of the models define
+    to tables created by an older version, so existing data is kept. Use Alembic for
+    anything more complex (renames, type changes) in production."""
+    from sqlalchemy import Integer, inspect, text
+
+    insp = inspect(engine)
+    added = []
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        existing = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in existing:
+                continue
+            ddl = f"ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(dialect=engine.dialect)}"
+            if isinstance(col.type, Integer) and not col.nullable:
+                ddl += " DEFAULT 0"
+            with engine.begin() as conn:
+                conn.execute(text(ddl))
+            added.append(f"{table.name}.{col.name}")
+    if "bookings.base_fee_paise" in added:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE bookings SET base_fee_paise = fee_paise WHERE base_fee_paise = 0 OR base_fee_paise IS NULL"))
+    if added:
+        import logging
+
+        logging.getLogger("booking").info("Database upgraded, added columns: %s", ", ".join(added))

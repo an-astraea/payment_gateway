@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     max_reschedules: int = 1
     default_fee_inr: int = 10000
 
+    coupon_valid_hours: int = 24
+    coupon_lock_to_email: bool = True
+
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
@@ -36,7 +39,7 @@ class Settings(BaseSettings):
     google_calendar_id: str = "primary"
     google_send_updates: str = "all"
 
-    smtp_host: str = "smtp.zoho.in"
+    smtp_host: str = "smtppro.zoho.in"
     smtp_port: int = 465
     smtp_username: str = ""
     smtp_password: str = ""

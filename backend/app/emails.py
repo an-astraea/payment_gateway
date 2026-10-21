@@ -21,6 +21,9 @@ class MailContext:
     employee_name: str | None = None
     client_email: str | None = None
     client_phone: str | None = None
+    base_fee_inr: int = 0
+    discount_inr: int = 0
+    coupon_code: str | None = None
 
 
 def _inr(amount: int) -> str:
@@ -73,9 +76,13 @@ def booking_confirmed(c: MailContext) -> tuple[str, str, str]:
         ("Service", c.service_name),
         ("Date", c.date_label),
         ("Time", c.slot_label),
-        ("Amount paid", _inr(c.fee_inr)),
-        ("Payment ID", c.payment_id or "-"),
     ]
+    if c.discount_inr:
+        rows += [
+            ("Consultation fee", _inr(c.base_fee_inr)),
+            ("Coupon", f"{c.coupon_code} (- {_inr(c.discount_inr)})"),
+        ]
+    rows += [("Amount paid", _inr(c.fee_inr)), ("Payment ID", c.payment_id or "-")]
     meet = (
         _button(c.meet_link, "Join Google Meet") + f'<p style="font-size:14px">Meeting link: {escape(c.meet_link)}</p>'
         if c.meet_link
@@ -91,7 +98,9 @@ def booking_confirmed(c: MailContext) -> tuple[str, str, str]:
     html = _wrap(
         c.company,
         "Your consultation is booked",
-        f"<p>Hello {escape(c.client_name)},</p><p>Thank you. Your payment was received and your slot is confirmed.</p>"
+        f"<p>Hello {escape(c.client_name)},</p><p>"
+        + ("Thank you. Your free consultation is confirmed." if c.fee_inr == 0 else "Thank you. Your payment was received and your slot is confirmed.")
+        + "</p>"
         f"{_rows(rows)}{meet}{manage}",
     )
     text = _text(
@@ -171,3 +180,36 @@ def employee_unassigned(c: MailContext) -> tuple[str, str, str]:
     subject = f"Session reassigned: {c.reference}"
     msg = f"The session on {c.date_label}, {c.slot_label} ({c.reference}) is no longer assigned to you."
     return subject, _wrap(c.company, "Session reassigned", f"<p>Hello {escape(c.employee_name or '')},</p><p>{escape(msg)}</p>"), msg
+
+
+def coupon_issued(
+    company: str, code: str, percent: int, expires_label: str, book_link: str, valid_hours: int, email_locked: bool
+) -> tuple[str, str, str]:
+    offer = "a free consultation" if percent == 100 else f"{percent}% off a consultation"
+    subject = f"Your free consultation coupon: {code}" if percent == 100 else f"Your {percent}% consultation coupon: {code}"
+    lock_line = " It works only with this email address." if email_locked else ""
+    code_box = (
+        '<p style="margin:20px 0"><span style="display:inline-block;padding:14px 22px;border:2px dashed #eab308;'
+        'border-radius:10px;background:#fef9e7;font-size:24px;font-weight:bold;letter-spacing:3px;color:#1e293b">'
+        f"{escape(code)}</span></p>"
+    )
+    body = (
+        f"<p>Hello,</p><p>Here is your coupon for <strong>{escape(offer)}</strong> with {escape(company)}.</p>"
+        f"{code_box}"
+        f"<p>Enter it in the <strong>Use coupon</strong> box on the last step when you book.</p>"
+        f'<p style="font-size:14px;color:#5B6670">Valid for one booking until <strong>{escape(expires_label)}</strong> '
+        f"({valid_hours} hours from now).{escape(lock_line)}</p>"
+        f"{_button(book_link, 'Book a consultation')}"
+    )
+    html = _wrap(company, "Your free consultation" if percent == 100 else f"{percent}% off your consultation", body)
+    text = _text(
+        [
+            "Hello,",
+            f"Here is your coupon for {offer} with {company}.",
+            f"Coupon code: {code}",
+            "Enter it in the Use coupon box on the last step when you book.",
+            f"Valid for one booking until {expires_label}.{lock_line}",
+            f"Book here: {book_link}",
+        ]
+    )
+    return subject, html, text

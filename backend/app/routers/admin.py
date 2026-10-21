@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import booking_service as svc
+from .. import coupon_rules, coupons
 from ..config import get_settings
 from ..database import get_db
 from ..models import BlockedDate, Employee
@@ -19,6 +20,10 @@ from ..schemas import (
     AssignRequest,
     BlockedDateIn,
     BlockedDateOut,
+    CouponConfig,
+    CouponCreate,
+    CouponOut,
+    CouponSend,
     EmployeeIn,
     EmployeeOut,
     EmployeeUpdate,
@@ -123,3 +128,35 @@ def remove_blocked(blocked_id: int, db: Session = Depends(get_db)):
     if r:
         db.delete(r)
         db.commit()
+
+
+# ---------- coupons
+
+@router.get("/coupons/config", response_model=CouponConfig)
+def coupon_config():
+    s = get_settings()
+    return CouponConfig(percents=list(coupon_rules.ALLOWED_PERCENTS), valid_hours=s.coupon_valid_hours, lock_to_email=s.coupon_lock_to_email)
+
+
+@router.get("/coupons", response_model=list[CouponOut])
+def list_coupons(status: str | None = Query(None, pattern="^(unused|used|expired|deactivated)$"), db: Session = Depends(get_db)):
+    return coupons.list_coupons(db, status)
+
+
+@router.post("/coupons", response_model=CouponOut, status_code=201)
+def create_coupon(req: CouponCreate, db: Session = Depends(get_db)):
+    """Generate a single-use coupon. Email it now (client_email) or later with /send."""
+    c, emailed = coupons.generate(db, req.percent, str(req.client_email) if req.client_email else None)
+    return coupons.coupon_out(c, emailed=emailed)
+
+
+@router.post("/coupons/{coupon_id}/send", response_model=CouponOut)
+def send_coupon(coupon_id: int, req: CouponSend, db: Session = Depends(get_db)):
+    """Email a coupon to the client (or resend it to the saved email)."""
+    c, emailed = coupons.send_to(db, coupon_id, str(req.client_email) if req.client_email else None)
+    return coupons.coupon_out(c, emailed=emailed)
+
+
+@router.post("/coupons/{coupon_id}/deactivate", response_model=CouponOut)
+def deactivate_coupon(coupon_id: int, db: Session = Depends(get_db)):
+    return coupons.coupon_out(coupons.deactivate(db, coupon_id))

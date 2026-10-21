@@ -6,12 +6,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import booking_service as svc
+from .. import coupons
 from ..config import get_settings
 from ..database import get_db
 from ..integrations import razorpay_client as rzp
 from ..models import Service
 from ..schemas import (
     BookingPublic,
+    CouponCheckOut,
+    CouponCheckRequest,
     DayAvailability,
     HoldRequest,
     HoldResponse,
@@ -46,12 +49,29 @@ def get_availability(
     return svc.availability(db, start, days)
 
 
+@router.post("/coupons/check", response_model=CouponCheckOut)
+def check_coupon(req: CouponCheckRequest, db: Session = Depends(get_db)):
+    """Preview the discount on the payment step. The real price is set again in /bookings/hold."""
+    return coupons.check(db, req.code, req.service_id, str(req.email))
+
+
 @router.post("/bookings/hold", response_model=HoldResponse)
 def hold_slot(req: HoldRequest, db: Session = Depends(get_db)):
     """Hold the chosen slot and create the Razorpay order. The booking is confirmed only
     after the payment is verified."""
     b = svc.create_hold(db, req)
     s = get_settings()
+    if b.status == "confirmed":  # free booking (100% coupon): already confirmed, no payment
+        return HoldResponse(
+            reference=b.reference,
+            hold_expires_at=None,
+            order=None,
+            booking=svc.public_view(b),
+            client_name=b.client_name,
+            client_email=b.client_email,
+            client_phone=b.client_phone,
+            service_name=b.service_name,
+        )
     return HoldResponse(
         reference=b.reference,
         hold_expires_at=from_db(b.hold_expires_at),
